@@ -2,7 +2,9 @@
 
 ## Project
 
-SpringBoot microservice implementing a order management system with REST API, persistence, and validation.
+Spring Boot microservice (base package `com.rahulmitt.sdd`) built feature by feature through the Spec-Driven Development workflow below (see `README.md`).
+It has no fixed business domain: each feature's domain comes from its approved spec in
+`docs/spec/<feature>.md`, and is implemented as a REST API with persistence and validation.
 
 ## Build & Run
 
