@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mvn test *)",
+      "Bash(mvn install *)",
+      "Edit(docs/design/**)",
+      "Edit(docs/api/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$(git rev-parse --show-toplevel)/.claude/scripts/pre-commit-documentation.sh",
+            "timeout": 300,
+            "statusMessage": "Generating technical documentation..."
+          }
+        ]
+      }
+    ]
+  }
+}
