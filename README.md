@@ -17,25 +17,133 @@ the coding conventions every step enforces live in [`CLAUDE.md`](CLAUDE.md).
 <a id="table-of-contents"></a>
 ## Table of Contents
 
-- [1. Overview](#overview)
-- [2. Failure modes and guardrails](#failure-modes-and-guardrails)
-- [3. Step 1 — Discovery (`/sdd-discovery`)](#step-1-discovery-sdd-discovery)
-- [4. Step 2 — High-Level Design (`/sdd-hld`)](#step-2-high-level-design-sdd-hld)
-- [5. Step 3 — Low-Level Design (`/sdd-lld`)](#step-3-low-level-design-sdd-lld)
-- [6. Step 4 — Acceptance Test (`/sdd-acceptance-test`)](#step-4-acceptance-test-sdd-acceptance-test)
-- [7. Step 5 — TDD inner loop (`/sdd-tdd`)](#step-5-tdd-inner-loop-sdd-tdd)
-- [8. Step 6 — Review (`/sdd-review`)](#step-6-review-sdd-review)
-- [9. Compliance checks](#compliance-checks)
+- [1. Prerequisites and setup](#prerequisites-and-setup)
+    - [Prerequisites](#prerequisites)
+    - [Project setup](#project-setup)
+    - [Documentation hook (`PreToolUse`)](#documentation-hook-pretooluse)
+- [2. Overview](#overview)
+- [3. Failure modes and guardrails](#failure-modes-and-guardrails)
+- [4. Step 1 — Discovery (`/sdd-discovery`)](#step-1-discovery-sdd-discovery)
+- [5. Step 2 — High-Level Design (`/sdd-hld`)](#step-2-high-level-design-sdd-hld)
+- [6. Step 3 — Low-Level Design (`/sdd-lld`)](#step-3-low-level-design-sdd-lld)
+- [7. Step 4 — Acceptance Test (`/sdd-acceptance-test`)](#step-4-acceptance-test-sdd-acceptance-test)
+- [8. Step 5 — TDD inner loop (`/sdd-tdd`)](#step-5-tdd-inner-loop-sdd-tdd)
+- [9. Step 6 — Review (`/sdd-review`)](#step-6-review-sdd-review)
+- [10. Compliance checks](#compliance-checks)
     - [`spec-compliance` sub-agent](#spec-compliance-sub-agent)
     - [`design-compliance` sub-agent](#design-compliance-sub-agent)
-- [10. Hooks and permissions](#hooks-and-permissions)
-- [11. Artifacts at a glance](#artifacts-at-a-glance)
-- [12. Conclusion — Harness and guardrails](#conclusion-harness-and-guardrails)
+- [11. Hooks and permissions](#hooks-and-permissions)
+- [12. Artifacts at a glance](#artifacts-at-a-glance)
+- [13. Conclusion — Harness and guardrails](#conclusion-harness-and-guardrails)
+
+---
+
+<a id="prerequisites-and-setup"></a>
+## 1. Prerequisites and setup
+
+<a id="prerequisites"></a>
+### Prerequisites
+
+| Tool | Needed for | Notes |
+|------|------------|-------|
+| Java 21 | Build and tests | See `<java.version>` in `pom.xml` |
+| Maven 3.9+ | Build and tests | A locally installed `mvn` |
+| Claude Code CLI (`claude`) | The SDD commands and the documentation hook | Installed and authenticated (`claude` then `/login`) |
+| `jq`, `perl`, `pgrep` | Documentation hook | Without them the hook skips the docs and doesn't block the commit |
+| GNU `timeout` (or `gtimeout` on macOS) | Documentation hook | Recommended; it puts a time limit on each `claude` call |
+| [bats-core](https://github.com/bats-core/bats-core) | Hook tests only | Optional |
+
+On Windows, run everything inside **WSL**. The hook's dependencies are installed only there.
+
+<a id="project-setup"></a>
+### Project setup
+
+```bash
+git clone <repo-url> && cd spec-driven-development
+mvn verify          # unit (*Test) + acceptance (*IT) tests against H2
+claude              # start Claude Code from the repository root
+```
+
+Tests need no database: they run against H2 in MySQL mode. Before you run the app against MySQL,
+add `com.mysql:mysql-connector-j` (runtime scope) to `pom.xml` (see `CLAUDE.md`).
+
+<a id="documentation-hook-pretooluse"></a>
+### Documentation hook (`PreToolUse`)
+
+`.claude/scripts/pre-commit-documentation.sh` writes or updates technical documentation in
+`docs/technical/` for the staged changes and stages it, so the docs go into the same commit. It
+runs as a Claude Code `PreToolUse` hook and, optionally, as a native git `pre-commit` hook.
+
+1. **Make the script executable** (the whole `.claude/scripts/` folder is needed: the script
+   sources `lib/*.sh` and `prompts.sh`):
+
+   ```bash
+   chmod +x .claude/scripts/pre-commit-documentation.sh
+   ```
+
+2. **Register the hook** in `.claude/settings.json` (already committed in this repository):
+
+   ```json
+   "hooks": {
+     "PreToolUse": [
+       {
+         "matcher": "Bash",
+         "hooks": [
+           {
+             "type": "command",
+             "command": "$(git rev-parse --show-toplevel)/.claude/scripts/pre-commit-documentation.sh",
+             "timeout": 300,
+             "statusMessage": "Generating technical documentation..."
+           }
+         ]
+       }
+     ]
+   }
+   ```
+
+   The hook gets every `Bash` tool call as JSON on stdin and exits at once unless the command is a
+   `git commit` in this repository. Keep `timeout` above `DOC_TIME_BUDGET + DOC_CALL_TIMEOUT`
+   (150 + 120 seconds by default).
+
+3. **Reload Claude Code.** Claude Code reads hooks when a session starts. Restart the session, or
+   open `/hooks` to review and approve the change.
+
+4. **Commit in two separate commands** under Claude Code:
+
+   ```bash
+   git add <files>          # one Bash call
+   git commit -m "..."      # a separate call, without -a/-i/-o/-p or file paths
+   ```
+
+   The hook blocks (exit code 2) a commit that stages files in the same command (such as
+   `git add . && git commit` or `git commit -a`), because it runs before the command and can't see
+   what will be staged.
+
+5. **Optional: install the native git hook** so that commits made outside Claude Code (terminal,
+   IntelliJ, VS Code) are documented too:
+
+   ```bash
+   printf '#!/bin/bash\nexec "$(git rev-parse --show-toplevel)/.claude/scripts/pre-commit-documentation.sh" "$@"\n' > .git/hooks/pre-commit
+   chmod +x .git/hooks/pre-commit
+   ```
+
+   Use this wrapper, not a symlink: Git for Windows can't follow a symlink created in WSL. Under
+   Git for Windows the hook re-runs itself inside WSL. A commit already documented by the Claude
+   Code hook is skipped by the native one.
+
+6. **Verify:** stage a small change and ask Claude to commit it. The status line shows
+   *"Generating technical documentation…"* and a new file under `docs/technical/` is staged. Run
+   the hook's own tests with `bats .claude/scripts/tests`.
+
+You can tune the hook through environment variables (defaults shown): `DOC_MAX_DIFF_BYTES=60000`,
+`DOC_TIME_BUDGET=150`, `DOC_CALL_TIMEOUT=120`, `DOC_PARALLEL=4`, `DOC_FAST_MODEL=haiku`.
+
+<p align="right"><a href="#table-of-contents">Back to top ↑</a></p>
 
 ---
 
 <a id="overview"></a>
-## 1. Overview
+## 2. Overview
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "basis"}}}%%
@@ -82,7 +190,7 @@ The design steps use **opus** because they involve judgement and trade-offs; the
 ---
 
 <a id="failure-modes-and-guardrails"></a>
-## 2. Failure modes and guardrails
+## 3. Failure modes and guardrails
 
 AI-assisted coding fails in predictable ways. Each step is built to counter one or more of them:
 
@@ -107,7 +215,7 @@ AI-assisted coding fails in predictable ways. Each step is built to counter one 
 ---
 
 <a id="step-1-discovery-sdd-discovery"></a>
-## 3. Step 1 — Discovery (`/sdd-discovery`)
+## 4. Step 1 — Discovery (`/sdd-discovery`)
 
 **Goal:** turn a user story into a precise, testable set of business rules, using
 [Example Mapping](https://cucumber.io/blog/bdd/example-mapping-introduction/).
@@ -139,7 +247,7 @@ answers are folded into the rules.
 ---
 
 <a id="step-2-high-level-design-sdd-hld"></a>
-## 4. Step 2 — High-Level Design (`/sdd-hld`)
+## 5. Step 2 — High-Level Design (`/sdd-hld`)
 
 **Goal:** decide the *shape* of the solution — components, API, data model, flows — before any
 code exists. Existing entities, endpoints and the error format are reused, not duplicated.
@@ -181,7 +289,7 @@ or class signatures — those belong to the LLD.
 ---
 
 <a id="step-3-low-level-design-sdd-lld"></a>
-## 5. Step 3 — Low-Level Design (`/sdd-lld`)
+## 6. Step 3 — Low-Level Design (`/sdd-lld`)
 
 **Goal:** a class-level blueprint with **no method bodies**.
 
@@ -211,7 +319,7 @@ applied to it.
 ---
 
 <a id="step-4-acceptance-test-sdd-acceptance-test"></a>
-## 6. Step 4 — Acceptance Test (`/sdd-acceptance-test`)
+## 7. Step 4 — Acceptance Test (`/sdd-acceptance-test`)
 
 **Goal:** write a **failing** end-to-end test for the **next rule only** (as ordered by the LLD).
 
@@ -255,7 +363,7 @@ the rule, the test still fails for the right reason → **STOP**.
 ---
 
 <a id="step-5-tdd-inner-loop-sdd-tdd"></a>
-## 7. Step 5 — TDD inner loop (`/sdd-tdd`)
+## 8. Step 5 — TDD inner loop (`/sdd-tdd`)
 
 **Goal:** make the red acceptance examples green through small, unit-test-driven cycles. Each
 invocation runs **exactly one** cycle.
@@ -305,7 +413,7 @@ for each rule in LLD implementation order:
 ---
 
 <a id="step-6-review-sdd-review"></a>
-## 8. Step 6 — Review (`/sdd-review`)
+## 9. Step 6 — Review (`/sdd-review`)
 
 **Goal:** catch what passing tests won't — architecture violations, naming, weak assertions,
 contract and design drift, missing spec coverage.
@@ -324,7 +432,7 @@ audits the uncommitted changes (or `HEAD` if the tree is clean) against the chec
 ---
 
 <a id="compliance-checks"></a>
-## 9. Compliance checks
+## 10. Compliance checks
 
 The approved spec and designs are enforced in four layers, from earliest to latest:
 
@@ -363,21 +471,22 @@ files changed in the cycle.
 ---
 
 <a id="hooks-and-permissions"></a>
-## 10. Hooks and permissions
+## 11. Hooks and permissions
 
 `.claude/settings.json` pre-approves `mvn test *` and `mvn install *`, plus file edits under
 `docs/design/**` and `docs/api/**` (`Edit(...)` rules, which also cover Write), so saving or
 revising an HLD, LLD or OpenAPI contract never prompts. `/sdd-hld` and `/sdd-lld` also list
 `Write` and `Edit` in their `allowed-tools`. The settings file also registers a `PreToolUse`
 hook on `Bash` that runs `.claude/scripts/pre-commit-documentation.sh` (status message:
-*"Generating technical documentation…"*).
+*"Generating technical documentation…"*). See
+[Documentation hook (`PreToolUse`)](#documentation-hook-pretooluse) for setup.
 
 <p align="right"><a href="#table-of-contents">Back to top ↑</a></p>
 
 ---
 
 <a id="artifacts-at-a-glance"></a>
-## 11. Artifacts at a glance
+## 12. Artifacts at a glance
 
 ```text
 docs/
@@ -402,7 +511,7 @@ Traceability runs straight through: **spec rule → HLD flow → LLD service met
 ---
 
 <a id="conclusion-harness-and-guardrails"></a>
-## 12. Conclusion — Harness and guardrails
+## 13. Conclusion — Harness and guardrails
 
 Everything in this document comes down to two ideas: the **harness** and the **guardrails**.
 
@@ -437,7 +546,7 @@ Everything in this document comes down to two ideas: the **harness** and the **g
 
 Process and convention guardrails are **instructions**. The model follows them reliably, but
 compliance is probabilistic. Deterministic guardrails are **enforcement**. The harness or the
-build applies them whatever the model decides. As [§9](#compliance-checks) notes, the compliance
+build applies them whatever the model decides. As [§10](#compliance-checks) notes, the compliance
 agents are prompt-level enforcement: nothing in the build fails if a check is skipped.
 
 The rule that follows: **the more costly it is to break a rule, the further it should move from
